@@ -1,0 +1,18 @@
+*.h5
+
+__pycache__
+.pytest_cache
+__marimo__
+
+*.prof
+*.sh
+*.pkl
+*.out
+*.npy
+*.log
+*.json
+*.vesta
+
+# Ignore the html build directory for the documents
+docs/build/
+.DS_Store

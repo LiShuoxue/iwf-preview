@@ -143,11 +143,11 @@ class IWFWorkflow(lib.StreamObject):
 
         if write_cube:
             mylo.dump_cube(path=f"{path}/cube/", C_ao_lo=C_ao_lo, **cube_kwargs)
-
+        np.save(f"./{path}/C_ao_lo.npy", C_ao_lo)
         return C_ao_lo
 
 
-    def get_band_plotter(self, energy_range=[-10, 10], nrow=1, ncol=1):
+    def get_band_plotter(self, energy_range=[-10, 10], nrow=1, ncol=1, subplot_titles=None):
         return BandPlotter(
             ase_obj=self.ase_obj,
             kpath=self.band_kwargs['kpath'],
@@ -157,4 +157,5 @@ class IWFWorkflow(lib.StreamObject):
             special_points=self.band_kwargs['special_points'],
             energy_range=energy_range,
             nrow=nrow, ncol=ncol,
+            subplot_titles=subplot_titles,
         )

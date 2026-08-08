@@ -129,6 +129,7 @@ class IWF(lib.StreamObject):
                 cls.cell = self.cell
                 cls.mo_energy = self.mo_energy
                 cls.mo_coeff = self.mo_coeff
+                cls.verbose = self.verbose
             @property
             def kpts(cls):
                 return self.kpts_abs
@@ -222,7 +223,7 @@ class IWF(lib.StreamObject):
         assert self.kmesh is not None, "kmesh must be provided to get the Wannier90 object"
         other_kws = get_w90_projection_keywords(self.cell, self.downfold_labels)
         myw90 = pywannier90.W90(self.mf, self.kmesh,
-                                num_wann=self.nwann, other_kws=other_kws)
+                                num_wann=self.nwann, other_keywords=other_kws)
         return myw90
 
 

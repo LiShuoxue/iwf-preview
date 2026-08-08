@@ -46,6 +46,7 @@ class BandPlotter():
                  special_points=None,
                  energy_range=[-10, 10], # eV
                  nrow=1, ncol=1,
+                 subplot_titles=None,
                  ):
         """"""
         self.is_subplot = (nrow > 1 or ncol > 1)
@@ -66,7 +67,8 @@ class BandPlotter():
 
         self._legend_for = {}
         if self.is_subplot:
-            self.fig = make_subplots(rows=nrow, cols=ncol, horizontal_spacing=0.03)
+            self.fig = make_subplots(rows=nrow, cols=ncol, horizontal_spacing=0.03,
+                                      subplot_titles=subplot_titles)
             for r in range(1, nrow + 1):
                 for c in range(1, ncol + 1):
                     n = (r - 1) * ncol + c
@@ -241,10 +243,12 @@ class BandPlotter():
                                annotation_position='top left',
                                annotation_font=dict(size=11, color=froz_color), **loc)
 
-    def dump(self, target=8050):
+    def dump(self, target=8050, template='plotly_white',
+             font_family='Times New Roman, Times, serif', font_size=28,
+             width=1200, height=800, scale=2):
         self.fig.update_layout(
-            font=dict(family='Times New Roman', size=28),
-            template='plotly_white',
+            font=dict(family=font_family, size=font_size),
+            template=template,
         )
 
         if isinstance(target, int): # port
@@ -252,5 +256,5 @@ class BandPlotter():
 
         elif '.png' in target:
             pio.base_renderers.default = 'png'
-            pio.write_image(self.fig, target, scale=2, width=1200, height=800)
+            pio.write_image(self.fig, target, scale=scale, width=width, height=height)
             print(f'Band plot written to {target}')

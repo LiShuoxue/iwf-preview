@@ -12,8 +12,9 @@ from iwf.plot import BandPlotter
 
 
 class IWFWorkflow(lib.StreamObject):
-    def __init__(self, kmf, verbose=4):
+    def __init__(self, kmf, kmesh, verbose=4):
         self.kmf = kmf
+        self.kmesh = kmesh
         self.ase_obj = pyscf_ase.pyscf_to_ase_atoms(kmf.cell)
         self.iwf_obj = None
         self.verbose = verbose
@@ -81,7 +82,7 @@ class IWFWorkflow(lib.StreamObject):
     def init_iwf_object(self):
         kmf = self.kmf
         _keys_iwf = {'minao', 'core', 'val', 'ref_method', 'sprd_param'}
-        _keys_general = {'downfold_labels', 'energy_window'}
+        _keys_general = {'downfold_labels', 'erange'}
         iwf_kwargs = {k: v for k, v in self.downfold_kwargs.items() if k in _keys_general}
         iwf_kwargs.update({k: v for k, v in self.downfold_kwargs.get('iwf', {}).items() if k in _keys_iwf})
 
@@ -98,9 +99,10 @@ class IWFWorkflow(lib.StreamObject):
             e_fermi = kmf.get_fermi()
             mo_energy = np.array(kmf.mo_energy) - e_fermi   # Fermi-aligned, Hartree
             mo_coeff  = np.array(kmf.mo_coeff)
-            mylo = IWF(cell=self.ase_obj, kpts_abs_or_kmesh=self.band_kwargs['kmesh'],
-                                mo_energy=mo_energy, mo_coeff=mo_coeff,
-                                verbose=self.verbose, **iwf_kwargs)
+            mylo = IWF(cell=self.kmf.cell,
+                        kpts_abs_or_kmesh=self.kmesh,
+                        mo_energy=mo_energy, mo_coeff=mo_coeff,
+                        verbose=self.verbose, **iwf_kwargs)
         else:
             with h5py.File('./bands.h5', 'r') as f:
                 kpts_band_abs = f['kpts_abs'][:]
@@ -137,7 +139,7 @@ class IWFWorkflow(lib.StreamObject):
             C_ao_lo = mylo.run_w90(w90_kwargs)
         elif lo_method == "scdm":
             scdm_kwargs = self.downfold_kwargs.get('scdm', {})
-            C_ao_lo = mylo.run_scdm(**scdm_kwargs)
+            C_ao_lo = mylo.run_scdm(scdm_kwargs)
 
         if write_cube:
             mylo.dump_cube(path=f"{path}/cube/", C_ao_lo=C_ao_lo, **cube_kwargs)

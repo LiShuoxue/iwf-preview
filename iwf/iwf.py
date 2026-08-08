@@ -49,18 +49,18 @@ def init_cell_ref(cell, kpts, minao, core, val):
         s2v = pmol_val.intor('int1e_ovlp', hermi=1) if pmol_val is not None else None
         s12v = gto.mole.intor_cross('int1e_ovlp', cell, pmol_val)
         s2v, s12v = s2v[None], s12v[None]
-
     return (pmol_val, idx_core, idx_val, s2v, s12v)
 
 
-def kernel_per_kpt(C_ref, mo_coeff, s1, s2, s12, nocc,
+def kernel_per_kpt(C_ref, mo_coeff, ovlp_dict, nocc,
         idx_ref=None, sprd_param=0.05, tol=1e-12):
+    s1, s2, s12 = map(ovlp_dict.get, ('s1', 's2', 's12'))
     char_mo = get_character(C_ref, s1, mo_coeff)
     def _fn(x): return np.sum(fsmear(char_mo, x, sprd_param)) - nocc
     mu = root_scalar(_fn, bracket=[0., 1.0], method='brentq', xtol=1e-8, x0=0.5).root
     occ = fsmear(char_mo, mu, sprd_param) * 2.
     _s2 = s2 if idx_ref is None else s2[idx_ref][:, idx_ref]
-    _s12 = s12 if idx_ref is None else s12[idx_ref]
+    _s12 = s12 if idx_ref is None else s12[:, idx_ref]
     C_ao_iao = iao.get_iao(s1, _s2, _s12, mo_coeff, occ, proj_B1=mo_coeff, tol=tol)
     return C_ao_iao, char_mo, occ
 
@@ -177,11 +177,12 @@ class IWF(lib.StreamObject):
                        s=s1[k], pre_orth_ao=lo.orth.REF_BASIS)
                        for k in range(self.nkpts)])
             self.idx_core = np.array([])
+            C_ref = C_ref[..., self.idx_model_B1]
 
         elif self.ref_method.lower() == "b2":
             s1, s12 = map(self.ovlp_dict.get, ('s1', 's12'))
             lls = [x.strip() for x in self.cell_ref.ao_labels()]
-            idxs = np.hstack([np.array([lls.index(ll) for ll in dl]) for dl in self.start_labels])
+            idxs = np.array([lls.index(ll) for ll in self.downfold_labels])
             C_ref = []
             for k in range(self.nkpts):
                 s1cd = la.cho_factor(s1[k])
@@ -195,11 +196,11 @@ class IWF(lib.StreamObject):
 
     def kernel(self):
         C = []
-        for k in range(self.nkpts):
-            _get_MO_mask(self.mo_energy[k], self.erange, ncore=self.ncore)
+        for ik in range(self.nkpts):
+            mmk = _get_MO_mask(self.mo_energy[ik], self.erange, ncore=self.ncore)
+            evk = self.mo_coeff[ik][:, mmk]
             C_ao_iao, char_mo, occ = kernel_per_kpt(
-                self.C_ref[k], self.mo_coeff[k],
-                self.ovlp_dict['s1'][k], self.ovlp_dict['s2'][k], self.ovlp_dict['s12'][k],
+                self.C_ref[ik], evk, {key: val[ik] for key, val in self.ovlp_dict.items()},
                 self.nwann, self.idx_model_B2, self.sprd_param, tol=1e-12
             )
             C.append(C_ao_iao)

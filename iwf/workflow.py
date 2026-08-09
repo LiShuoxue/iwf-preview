@@ -108,7 +108,7 @@ class IWFWorkflow(lib.StreamObject):
                 kpts_band_abs = f['kpts_abs'][:]
                 mo_energy_band = f['e_band'][:]
                 mo_coeff_band = f['c_band'][:]
-            mylo = IWF(self.ase_obj, kpts_abs_or_kmesh=kpts_band_abs,
+            mylo = IWF(self.kmf.cell, kpts_abs_or_kmesh=kpts_band_abs,
                         mo_energy=mo_energy_band,
                         mo_coeff=mo_coeff_band,
                         verbose=self.verbose, **iwf_kwargs)

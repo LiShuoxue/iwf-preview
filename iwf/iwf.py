@@ -52,13 +52,24 @@ def init_cell_ref(cell, kpts, minao, core, val):
     return (pmol_val, idx_core, idx_val, s2v, s12v)
 
 
+def get_smear_occs(char_mo, nocc, sprd_param=0.05):
+    """
+    Also used in the character-based SCDM method.
+    """
+    def _fn(x): return np.sum(fsmear(char_mo, x, sprd_param)) - nocc
+    mu = root_scalar(_fn, bracket=[0., 1.0], method='brentq', xtol=1e-8, x0=0.5).root
+    occ = fsmear(char_mo, mu, sprd_param)
+    return occ
+
+
 def kernel_per_kpt(C_ref, mo_coeff, ovlp_dict, nocc,
         idx_ref=None, sprd_param=0.05, tol=1e-12):
     s1, s2, s12 = map(ovlp_dict.get, ('s1', 's2', 's12'))
     char_mo = get_character(C_ref, s1, mo_coeff)
-    def _fn(x): return np.sum(fsmear(char_mo, x, sprd_param)) - nocc
-    mu = root_scalar(_fn, bracket=[0., 1.0], method='brentq', xtol=1e-8, x0=0.5).root
-    occ = fsmear(char_mo, mu, sprd_param) * 2.
+    occ = get_smear_occs(char_mo, nocc, sprd_param) * 2.
+    # def _fn(x): return np.sum(fsmear(char_mo, x, sprd_param)) - nocc
+    # mu = root_scalar(_fn, bracket=[0., 1.0], method='brentq', xtol=1e-8, x0=0.5).root
+    # occ = fsmear(char_mo, mu, sprd_param) * 2.
     _s2 = s2 if idx_ref is None else s2[idx_ref][:, idx_ref]
     _s12 = s12 if idx_ref is None else s12[:, idx_ref]
     C_ao_iao = iao.get_iao(s1, _s2, _s12, mo_coeff, occ, proj_B1=mo_coeff, tol=tol)
@@ -276,14 +287,25 @@ class IWF(lib.StreamObject):
     def run_scdm(self, scdm_kwargs: dict={}):
         ew, ev = self.mo_energy, self.mo_coeff
         band_include_list = scdm_kwargs.get('band_include_list', None)
+        use_iwf_smear = scdm_kwargs.get('use_iwf_smear', False)
         if band_include_list is not None:
             ew = ew[..., band_include_list]
             ev = ev[..., band_include_list]
-        smear_func = scdm.smear_func(
-            ew,
-            mu=scdm_kwargs.get('mu', 0.0) / HARTREE2EV,
-            sigma=scdm_kwargs.get('sigma', 0.05) / HARTREE2EV,
-        )
+
+        if use_iwf_smear:
+            self.get_LO_ref()
+            smear_func = []
+            for k in range(self.nkpts):
+                char_mo = get_character(self.C_ref[k], self.ovlp_dict['s1'][k], mo_coeff=ev[k])
+                _sf = get_smear_occs(char_mo, self.nwann, sprd_param=self.sprd_param)
+                smear_func.append(_sf)
+            smear_func = np.array(smear_func)[np.newaxis]
+        else:
+            smear_func = scdm.smear_func(
+                ew,
+                mu=scdm_kwargs.get('mu', 0.0) / HARTREE2EV,
+                sigma=scdm_kwargs.get('sigma', 0.05) / HARTREE2EV,
+            )
         C_ao_lo = scdm.scdm_k(
             self.cell, np.array([ev]), self.kpts_abs,
             grid=scdm_kwargs.get('grid', 'becke'),

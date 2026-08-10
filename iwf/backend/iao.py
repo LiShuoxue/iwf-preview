@@ -458,6 +458,7 @@ def pre_step_iao(cell, minao, core_dic, val_dic, pmol_core, pmol_val, save_minao
 def get_iao(s1, s2, s12, mo_coeff, mo_occ, proj_B1=None, tol=1e-18):
     """
     Return the independent IAO construction for each k-point.
+    without virtual orbital PAOs.
     """
     mop = mo_coeff if proj_B1 is None else proj_B1.conj().T @ s1 @ mo_coeff
     s1p = np.array(s1) if proj_B1 is None else proj_B1.conj().T @ s1 @ proj_B1
@@ -475,6 +476,8 @@ def get_iao(s1, s2, s12, mo_coeff, mo_occ, proj_B1=None, tol=1e-18):
         ctild = orth.orth_cano(ctild, s1p, tol=tol)
         ccs2 = ctild @ ctild.conj().T @ s1p
         A += (ccs1 @ ccs2 * 2. - ccs1 - ccs2) @ p12
+        # virt = ((ccs1 @ ccs2 - ccs1 - ccs2) @ p12 + p12)
+        # print(f"Virt contribution = {np.linalg.norm(virt)} / {np.linalg.norm(A)}")
     A = A if proj_B1 is None else proj_B1 @ A
     A2 = orth.vec_lowdin(A, s1, tol=tol)
     return A2

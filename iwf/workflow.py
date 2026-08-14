@@ -1,3 +1,7 @@
+"""
+The wrapper workflow class of the IWF downfolding package.
+"""
+
 import os
 import h5py
 import numpy as np

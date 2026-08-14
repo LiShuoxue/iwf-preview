@@ -467,6 +467,7 @@ def get_iao(s1, s2, s12, mo_coeff, mo_occ, proj_B1=None, tol=1e-18):
     s1cd, s2cd = map(la.cho_factor, (s1p, s2))
     p12 = la.cho_solve(s1cd, s12p)
     A = np.array(p12)
+    # A = np.zeros_like(p12)
     if mop.size != 0:
         ccs1 = (mop * mo_occ) @ mop.conj().T @ s1p
         # cocc = mop[:, mo_occ > (.5 - tol)]
@@ -475,6 +476,7 @@ def get_iao(s1, s2, s12, mo_coeff, mo_occ, proj_B1=None, tol=1e-18):
         ctild = la.cho_solve(s1cd, s12p @ ctild)
         ctild = orth.orth_cano(ctild, s1p, tol=tol)
         ccs2 = ctild @ ctild.conj().T @ s1p
+        # A = ccs1 @ ccs2 @ p12
         A += (ccs1 @ ccs2 * 2. - ccs1 - ccs2) @ p12
         # virt = ((ccs1 @ ccs2 - ccs1 - ccs2) @ p12 + p12)
         # print(f"Virt contribution = {np.linalg.norm(virt)} / {np.linalg.norm(A)}")

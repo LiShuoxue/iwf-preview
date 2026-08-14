@@ -1,3 +1,7 @@
+"""
+Implementation of the IWF method.
+"""
+
 import os
 import h5py
 import numpy as np
@@ -67,9 +71,6 @@ def kernel_per_kpt(C_ref, mo_coeff, ovlp_dict, nocc,
     s1, s2, s12 = map(ovlp_dict.get, ('s1', 's2', 's12'))
     char_mo = get_character(C_ref, s1, mo_coeff)
     occ = get_smear_occs(char_mo, nocc, sprd_param) * 2.
-    # def _fn(x): return np.sum(fsmear(char_mo, x, sprd_param)) - nocc
-    # mu = root_scalar(_fn, bracket=[0., 1.0], method='brentq', xtol=1e-8, x0=0.5).root
-    # occ = fsmear(char_mo, mu, sprd_param) * 2.
     _s2 = s2 if idx_ref is None else s2[idx_ref][:, idx_ref]
     _s12 = s12 if idx_ref is None else s12[:, idx_ref]
     C_ao_iao = iao.get_iao(s1, _s2, _s12, mo_coeff, occ, proj_B1=mo_coeff, tol=tol)
@@ -211,6 +212,7 @@ class IWF(lib.StreamObject):
         for ik in range(self.nkpts):
             mmk = _get_MO_mask(self.mo_energy[ik], self.erange, ncore=self.ncore)
             evk = self.mo_coeff[ik][:, mmk]
+
             C_ao_iao, char_mo, occ = kernel_per_kpt(
                 self.C_ref[ik], evk, {key: val[ik] for key, val in self.ovlp_dict.items()},
                 self.nwann, self.idx_model_B2, self.sprd_param, tol=1e-12

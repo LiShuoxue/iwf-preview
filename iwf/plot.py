@@ -1,3 +1,7 @@
+"""
+Plotting utilities for IWF construction and benchmarks (constructed under the assistance of Claude Code)
+"""
+
 import numpy as np
 from pyscf.data.nist import HARTREE2EV, BOHR
 

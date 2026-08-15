@@ -20,7 +20,7 @@
 #         Zhi-Hao Cui <zhcui0408@gmail.com>
 
 """
-Intrinsic Atomic Orbitals (IAOs) and projected atomic orbitals (PAOs).
+Helper functions for the intrinsic atomic orbital (IAO) implementation, used here for B2 orbital generation.
 Ref. Knizia, J. Chem. Theory Comput. 2013, 9, 11, 4834.
      Cui et al. J. Chem. Theory Comput. 2020, 16, 1, 119.
 """
@@ -453,33 +453,3 @@ def pre_step_iao(cell, minao, core_dic, val_dic, pmol_core, pmol_val, save_minao
     idx_val  = np.asarray(idx_val, dtype=int)
 
     return (pmol_core, pmol_val, idx_core, idx_val, labs_core, labs_val)
-
-
-def get_iao(s1, s2, s12, mo_coeff, mo_occ, proj_B1=None, tol=1e-18):
-    """
-    Return the independent IAO construction for each k-point.
-    without virtual orbital PAOs.
-    """
-    mop = mo_coeff if proj_B1 is None else proj_B1.conj().T @ s1 @ mo_coeff
-    s1p = np.array(s1) if proj_B1 is None else proj_B1.conj().T @ s1 @ proj_B1
-    s12p = np.array(s12) if proj_B1 is None else proj_B1.conj().T @ s12
-    s21p = s12p.conj().T
-    s1cd, s2cd = map(la.cho_factor, (s1p, s2))
-    p12 = la.cho_solve(s1cd, s12p)
-    A = np.array(p12)
-    # A = np.zeros_like(p12)
-    if mop.size != 0:
-        ccs1 = (mop * mo_occ) @ mop.conj().T @ s1p
-        # cocc = mop[:, mo_occ > (.5 - tol)]
-        cocc = mop[:, mo_occ > tol]     # NOTE needs the case of some 'smearing'.
-        ctild = la.cho_solve(s2cd, s21p @ cocc)
-        ctild = la.cho_solve(s1cd, s12p @ ctild)
-        ctild = orth.orth_cano(ctild, s1p, tol=tol)
-        ccs2 = ctild @ ctild.conj().T @ s1p
-        # A = ccs1 @ ccs2 @ p12
-        A += (ccs1 @ ccs2 * 2. - ccs1 - ccs2) @ p12
-        # virt = ((ccs1 @ ccs2 - ccs1 - ccs2) @ p12 + p12)
-        # print(f"Virt contribution = {np.linalg.norm(virt)} / {np.linalg.norm(A)}")
-    A = A if proj_B1 is None else proj_B1 @ A
-    A2 = orth.vec_lowdin(A, s1, tol=tol)
-    return A2

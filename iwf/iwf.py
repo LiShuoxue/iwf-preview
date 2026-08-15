@@ -1,5 +1,7 @@
 """
 Implementation of the IWF method.
+
+Ref: arxiv/2608.xxxxx
 """
 
 import os
@@ -16,7 +18,7 @@ from pyscf.pbc.tools import pyscf_ase
 from pyscf.tools import cubegen
 
 from iwf.utils import get_w90_projection_keywords
-from iwf.backend import iao, orth, scdm, pywannier90
+from iwf.backend import iaohelper, orth, scdm, pywannier90
 
 
 def inv1pexp(x):
@@ -54,7 +56,7 @@ def get_character(C_ao_lo, ovlp, ew, ev, e0=None):
 
 
 def init_cell_ref(cell, kpts, minao, core, val):
-    prep_res = iao.pre_step_iao(cell, minao, core, val, None, None)
+    prep_res = iaohelper.pre_step_iao(cell, minao, core, val, None, None)
     pmol_core, pmol_val = prep_res[:2]
     lls_cell, lls_core, lls_val = (x.ao_labels() if x is not None else []
                                    for x in (cell, pmol_core, pmol_val))
@@ -71,6 +73,27 @@ def init_cell_ref(cell, kpts, minao, core, val):
         s12v = gto.mole.intor_cross('int1e_ovlp', cell, pmol_val)
         s2v, s12v = s2v[None], s12v[None]
     return (pmol_val, idx_core, idx_val, s2v, s12v)
+
+
+def get_iwf(s1, s2, s12, mo_coeff, mo_occ, proj_B1=None, tol=1e-18):
+    mop = mo_coeff if proj_B1 is None else proj_B1.conj().T @ s1 @ mo_coeff
+    s1p = np.array(s1) if proj_B1 is None else proj_B1.conj().T @ s1 @ proj_B1
+    s12p = np.array(s12) if proj_B1 is None else proj_B1.conj().T @ s12
+    s21p = s12p.conj().T
+    s1cd, s2cd = map(la.cho_factor, (s1p, s2))
+    p12 = la.cho_solve(s1cd, s12p)
+    A = np.array(p12)
+    if mop.size != 0:
+        ccs1 = (mop * mo_occ) @ mop.conj().T @ s1p
+        cocc = mop[:, mo_occ > tol]     # NOTE needs the case of some 'smearing'.
+        ctild = la.cho_solve(s2cd, s21p @ cocc)
+        ctild = la.cho_solve(s1cd, s12p @ ctild)
+        ctild = orth.orth_cano(ctild, s1p, tol=tol)
+        ccs2 = ctild @ ctild.conj().T @ s1p
+        A += (ccs1 @ ccs2 * 2. - ccs1 - ccs2) @ p12
+    A = A if proj_B1 is None else proj_B1 @ A
+    A2 = orth.vec_lowdin(A, s1, tol=tol)
+    return A2
 
 
 def get_smear_occs(char_mo, nocc, sigma=0.05):
@@ -90,7 +113,7 @@ def kernel_per_kpt(C_ref, mo_energy, mo_coeff, ovlp_dict, nocc,
     occ = get_smear_occs(res['char'], nocc, sigma) * 2.
     _s2 = s2 if idx_ref is None else s2[idx_ref][:, idx_ref]
     _s12 = s12 if idx_ref is None else s12[:, idx_ref]
-    C_ao_lo = iao.get_iao(s1, _s2, _s12, res['ev'], occ, proj_B1=res['ev'], tol=tol)
+    C_ao_lo = get_iwf(s1, _s2, _s12, res['ev'], occ, proj_B1=res['ev'], tol=tol)
     res.update(C_ao_lo=C_ao_lo, occ=occ)
     return res
 
@@ -103,13 +126,31 @@ def _get_MO_mask(ew, energy_window, ncore=0):
     return mask
 
 class IWF(lib.StreamObject):
+    """
+    Intrinsic Wannier Function (IWF) construction and analysis class.
+
+    Attributes:
+        cell: PySCF cell object
+        kpts_abs_or_kmesh: Absolute k-points (shape: (nkpts, 3)) or k-mesh (shape: (3, )) for the calculation
+        mo_energy: Molecular orbital energies (shape: (nkpts, nmo))
+        mo_coeff: Molecular orbital coefficients (shape: (nkpts, nmo, nmo))
+        minao: Minimal atomic orbital basis set for reference (for B2 construction)
+        core: Core orbitals for reference (for B2 construction)
+        val: Valence orbitals for reference (for B2 construction)
+        ref_method: Reference orbital for character calculation ('meta_lowdin', 'lowdin', 'NAO', 'B2')
+        downfold_labels: List of labels for the downfolded orbitals
+        erange: Energy range of MOs for finding the downfolded orbitals (in eV)
+        sigma: Smearing parameter for smeared IWF projector (Eq. (??))
+        e0: Smearing parameter for the scaled character matrix method (Eq. (??))
+        verbose: Verbosity level for logging
+    """
     def __init__(self,
                  cell: gto.Mole | pgto.Cell,
                  mo_energy,
                  mo_coeff,
                  kpts_abs_or_kmesh=np.array([1, 1, 1]),
                  minao='scf', core={}, val={},
-                 ref_method='iao',
+                 ref_method='meta_lowdin',
                  downfold_labels=[],
                  erange=[-10, 10],  # eV
                  sigma=0.05,

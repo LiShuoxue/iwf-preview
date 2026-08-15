@@ -30,10 +30,27 @@ def fsmear(x, mu, sigma):
     return (fd - f0) / (f1 - f0)
 
 
-def get_character(C_ao_lo, ovlp, mo_coeff):
+def get_scaled_character_matrix(C_ao_lo, ovlp, mo_energy, mo_coeff, e0=0.05):
+    # sigma: eV
     C_iao_mo = C_ao_lo.conj().swapaxes(-2, -1) @ ovlp @ mo_coeff
-    char_mo = np.sum(C_iao_mo * C_iao_mo.conj(), axis=-2).real
-    return char_mo
+    char_mat = np.einsum("...mi,...mj->...ij", C_iao_mo.conj(), C_iao_mo)
+    dE = np.abs(mo_energy[..., None] - mo_energy[..., None, :]) * HARTREE2EV
+    scale_mat = np.exp(-dE**2 / (2 * e0**2))
+    return char_mat * scale_mat
+
+
+def get_character(C_ao_lo, ovlp, ew, ev, e0=None):
+    if e0 is None or np.allclose(e0, 0.0):    # diagonal
+        C_iao_mo = C_ao_lo.conj().swapaxes(-2, -1) @ ovlp @ ev
+        char_mo = np.sum(C_iao_mo * C_iao_mo.conj(), axis=-2).real
+        return dict(char=char_mo, ew=ew, ev=ev)
+    else:
+        fock = ovlp @ ev @ np.diag(ew) @ ev.conj().T @ ovlp
+        char_mat = get_scaled_character_matrix(C_ao_lo, ovlp, ew, ev, e0=e0)
+        char_mo, rot_coef = la.eigh(char_mat)
+        evrot = ev @ rot_coef
+        ewrot = np.diag(evrot.conj().T @ fock @ evrot).real
+        return dict(char=char_mo, ew=ewrot, ev=evrot)
 
 
 def init_cell_ref(cell, kpts, minao, core, val):
@@ -56,25 +73,26 @@ def init_cell_ref(cell, kpts, minao, core, val):
     return (pmol_val, idx_core, idx_val, s2v, s12v)
 
 
-def get_smear_occs(char_mo, nocc, sprd_param=0.05):
+def get_smear_occs(char_mo, nocc, sigma=0.05):
     """
     Also used in the character-based SCDM method.
     """
-    def _fn(x): return np.sum(fsmear(char_mo, x, sprd_param)) - nocc
+    def _fn(x): return np.sum(fsmear(char_mo, x, sigma)) - nocc
     mu = root_scalar(_fn, bracket=[0., 1.0], method='brentq', xtol=1e-8, x0=0.5).root
-    occ = fsmear(char_mo, mu, sprd_param)
+    occ = fsmear(char_mo, mu, sigma)
     return occ
 
 
-def kernel_per_kpt(C_ref, mo_coeff, ovlp_dict, nocc,
-        idx_ref=None, sprd_param=0.05, tol=1e-12):
+def kernel_per_kpt(C_ref, mo_energy, mo_coeff, ovlp_dict, nocc,
+        idx_ref=None, sigma=0.05, e0=None, tol=1e-12):
     s1, s2, s12 = map(ovlp_dict.get, ('s1', 's2', 's12'))
-    char_mo = get_character(C_ref, s1, mo_coeff)
-    occ = get_smear_occs(char_mo, nocc, sprd_param) * 2.
+    res = get_character(C_ref, s1, mo_energy, mo_coeff, e0=e0)
+    occ = get_smear_occs(res['char'], nocc, sigma) * 2.
     _s2 = s2 if idx_ref is None else s2[idx_ref][:, idx_ref]
     _s12 = s12 if idx_ref is None else s12[:, idx_ref]
-    C_ao_iao = iao.get_iao(s1, _s2, _s12, mo_coeff, occ, proj_B1=mo_coeff, tol=tol)
-    return C_ao_iao, char_mo, occ
+    C_ao_lo = iao.get_iao(s1, _s2, _s12, mo_coeff, occ, proj_B1=mo_coeff, tol=tol)
+    res.update(C_ao_lo=C_ao_lo, occ=occ)
+    return res
 
 
 def _get_MO_mask(ew, energy_window, ncore=0):
@@ -83,7 +101,6 @@ def _get_MO_mask(ew, energy_window, ncore=0):
     if ncore > 0:
         mask[:ncore] = False
     return mask
-
 
 class IWF(lib.StreamObject):
     def __init__(self,
@@ -95,7 +112,8 @@ class IWF(lib.StreamObject):
                  ref_method='iao',
                  downfold_labels=[],
                  erange=[-10, 10],  # eV
-                 sprd_param=0.05,
+                 sigma=0.05,
+                 e0=None, # eV, for scaled character matrix method
                  verbose=4,
                  ):
 
@@ -124,7 +142,8 @@ class IWF(lib.StreamObject):
         self.minao = minao
         self.core = core
         self.val = val
-        self.sprd_param = sprd_param
+        self.sigma = sigma
+        self.e0 = e0
         self.downfold_labels = downfold_labels
         self.idx_model_B1 = []
         self.idx_model_B2 = []
@@ -211,14 +230,14 @@ class IWF(lib.StreamObject):
         C = []
         for ik in range(self.nkpts):
             mmk = _get_MO_mask(self.mo_energy[ik], self.erange, ncore=self.ncore)
-            evk = self.mo_coeff[ik][:, mmk]
-
-            C_ao_iao, char_mo, occ = kernel_per_kpt(
-                self.C_ref[ik], evk, {key: val[ik] for key, val in self.ovlp_dict.items()},
-                self.nwann, self.idx_model_B2, self.sprd_param, tol=1e-12
+            ewk, evk = self.mo_energy[ik][mmk], self.mo_coeff[ik][:, mmk]
+            res = kernel_per_kpt(
+                self.C_ref[ik], ewk, evk,
+                {key: val[ik] for key, val in self.ovlp_dict.items()},
+                self.nwann, self.idx_model_B2, self.sigma, self.e0, tol=1e-12
             )
-            C.append(C_ao_iao)
-            self.anal_data.append({'char': char_mo, 'occ': occ})
+            C.append(res['C_ao_lo'])
+            self.anal_data.append({k: res[k] for k in ('char', 'ew', 'occ')})
         self.iwf = np.array(C)
         return self.iwf, self.anal_data
 
@@ -299,7 +318,7 @@ class IWF(lib.StreamObject):
             smear_func = []
             for k in range(self.nkpts):
                 char_mo = get_character(self.C_ref[k], self.ovlp_dict['s1'][k], mo_coeff=ev[k])
-                _sf = get_smear_occs(char_mo, self.nwann, sprd_param=self.sprd_param)
+                _sf = get_smear_occs(char_mo, self.nwann, sigma=self.sigma)
                 smear_func.append(_sf)
             smear_func = np.array(smear_func)[np.newaxis]
         else:

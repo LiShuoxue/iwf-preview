@@ -85,7 +85,7 @@ class IWFWorkflow(lib.StreamObject):
 
     def init_iwf_object(self):
         kmf = self.kmf
-        _keys_iwf = {'minao', 'core', 'val', 'ref_method', 'sprd_param'}
+        _keys_iwf = {'minao', 'core', 'val', 'ref_method', 'sigma', 'e0'}
         _keys_general = {'downfold_labels', 'erange'}
         iwf_kwargs = {k: v for k, v in self.downfold_kwargs.items() if k in _keys_general}
         iwf_kwargs.update({k: v for k, v in self.downfold_kwargs.get('iwf', {}).items() if k in _keys_iwf})

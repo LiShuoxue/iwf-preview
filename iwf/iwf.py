@@ -90,7 +90,7 @@ def kernel_per_kpt(C_ref, mo_energy, mo_coeff, ovlp_dict, nocc,
     occ = get_smear_occs(res['char'], nocc, sigma) * 2.
     _s2 = s2 if idx_ref is None else s2[idx_ref][:, idx_ref]
     _s12 = s12 if idx_ref is None else s12[:, idx_ref]
-    C_ao_lo = iao.get_iao(s1, _s2, _s12, mo_coeff, occ, proj_B1=mo_coeff, tol=tol)
+    C_ao_lo = iao.get_iao(s1, _s2, _s12, res['ev'], occ, proj_B1=res['ev'], tol=tol)
     res.update(C_ao_lo=C_ao_lo, occ=occ)
     return res
 
@@ -317,7 +317,7 @@ class IWF(lib.StreamObject):
             self.get_LO_ref()
             smear_func = []
             for k in range(self.nkpts):
-                char_mo = get_character(self.C_ref[k], self.ovlp_dict['s1'][k], mo_coeff=ev[k])
+                char_mo = get_character(self.C_ref[k], self.ovlp_dict['s1'][k], mo_coeff=ev[k])['char']
                 _sf = get_smear_occs(char_mo, self.nwann, sigma=self.sigma)
                 smear_func.append(_sf)
             smear_func = np.array(smear_func)[np.newaxis]

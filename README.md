@@ -1,6 +1,6 @@
-# iwf-preview
+# Code Preview of "Intrinsic Wannier Functions for Hamiltonian downfolding"
 
-The source code of the Intrinsic Wannier Function (IWF) method project, accompanying the manuscript "Intrinsic Wannier Functions for Hamiltonian downfolding": [arXiv:2608.xxxxx](https://arxiv.org/abs/2608.xxxxx).
+The source code of the Intrinsic Wannier Function (IWF) method project, accompanying the manuscript "Intrinsic Wannier Functions for Hamiltonian downfolding": [arXiv:2608.15557](https://arxiv.org/abs/2608.15557).
 
 This is a preview release of the code used to produce the results in the paper. It is built on top of [PySCF](https://github.com/pyscf/pyscf) (periodic mean-field module) and a modified [pyWannier90](https://github.com/hungpham2017/pyWannier90) interface, and implements the IWF construction for downfolding periodic mean-field calculations onto a compact, chemically intuitive orbital basis.
 

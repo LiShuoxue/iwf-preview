@@ -1,7 +1,7 @@
 """
 Implementation of the IWF method.
 
-Ref: arxiv/2608.xxxxx
+Ref: arxiv/2608.15557
 """
 
 import os

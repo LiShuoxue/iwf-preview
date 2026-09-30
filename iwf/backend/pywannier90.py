@@ -374,7 +374,7 @@ class W90:
         self.proj_s_qaxis = proj_s_qaxis
         logger.info(self, "Wannier90: setup complete.")
 
-    def get_M_mat(self):
+    def get_M_mat(self, kblksize=None):
         r"""
         Construct the ovelap matrix: M_{m,n}^{(\mathbf{k,b})}
         Eq. 25 in PRB, 56, 12847.
@@ -390,12 +390,85 @@ class W90:
         Shuoxue NOTE (Jun 2, 2026):
             1. Batch the k-points when constructing <u_k|u_k+b>;
             2. Debug the Gv input dimension (nGV, 3) for the newest PySCF version.
+
+        Shuoxue NOTE (Sep 30, 2026):
+            ft_aopair / ft_aopair_kpts rebuild the range-separated cell and the
+            BvK supermol at every call, which dominates the cost (> 90% in the
+            per-(k, b) loop, see get_M_mat_loop). Here the FT kernel is built
+            once (bvk_kmesh = mp_grid) and reused for all b and k-blocks; the
+            (k, b) pairs are grouped by the unique b, and the MO transformation
+            uses batched matmul instead of the 3-operand einsum.
+
+        Args:
+            kblksize: number of k-points per ft_kernel call. Default: all k-points
+                      if they fit in max_memory. A smaller block only saves the
+                      memory of the AO overlaps, but recomputes the lattice-summed
+                      integrals of the BvK cells for each block.
         """
         logger.debug(self, "Wannier90: M matrix start.")
+        cput0 = (logger.process_clock(), logger.perf_counter())
+        cell = self.cell
+        nao, nband, nntot = cell.nao_nr(), self.num_bands, self.nntot
+        M_matrix = np.empty((nband, nband, nntot, self.num_kpts),
+                            dtype=np.complex128, order='F')
+        mo_coeff = np.asarray(self.mo_coeff)[:, :, self.band_included_list]
+        kpts = cell.get_abs_kpts(self.kpt_latt.T)
+
+        # group the (k, b_idx) pairs by the unique b (the order of b may differ between k)
+        nnlst = self.nnlist[:, :nntot] - 1
+        kl = self.kpt_latt.T
+        b_all = kl[nnlst] - kl[:, None] + self.nncell[:, :, :nntot].transpose(1, 2, 0)
+        b_uniq, b_group = np.unique(np.round(b_all.reshape(-1, 3), 6), axis=0,
+                                    return_inverse=True)
+        b_group = b_group.reshape(self.num_kpts, nntot)
+
+        # FT kernel, as in ft_ao.ft_aopair_kpts but built only once
+        rs_cell = ft_ao._RangeSeparatedCell.from_cell(cell, ft_ao.KECUT_THRESHOLD,
+                                                      ft_ao.RCUT_THRESHOLD)
+        rcut = ft_ao.estimate_rcut(rs_cell)
+        supmol = ft_ao.ExtendedMole.from_cell(rs_cell, self.mp_grid, rcut.max())
+        supmol = supmol.strip_basis(rcut)
+        ft_kern = supmol.gen_ft_kernel('s1', return_complex=True)
+        cput1 = logger.timer(self, "Wannier90: M matrix ft kernel", *cput0)
+
+        if kblksize is None:
+            # per k-point: AO overlap + gathered MOs + intermediate + M, and the
+            # per-thread buffer of the C driver (di^2 * BLOCK_SIZE(104) per k)
+            di = np.diff(cell.ao_loc_nr()).max()
+            nthreads = lib.num_threads()
+            bytes_per_k = 16 * (nao**2 + 2*nao*nband + nband*nao + nband**2
+                                + nthreads * di**2 * 104)
+            max_memory = getattr(self.kmf, 'max_memory', cell.max_memory)
+            mem_avail = (max_memory - lib.current_memory()[0]) * 1e6
+            kblksize = int(max(1, min(self.num_kpts, mem_avail // bytes_per_k)))
+        logger.info(self, "Wannier90: M matrix with %d unique b, kblksize = %d",
+                    len(b_uniq), kblksize)
+
+        for u in range(len(b_uniq)):
+            k_inds_b, b_inds_b = np.where(b_group == u)
+            b = cell.get_abs_kpts(b_uniq[u])
+            for p0 in range(0, len(k_inds_b), kblksize):
+                k_inds = k_inds_b[p0:p0+kblksize]
+                b_inds = b_inds_b[p0:p0+kblksize]
+                # G = b, kj = (k + b), q = 0
+                ovlp_ao = ft_kern(b.reshape(1, 3), None, None, np.zeros(3),
+                                  kpts[k_inds] + b)[:, 0]
+                Cm = mo_coeff[k_inds]
+                Cn = mo_coeff[nnlst[k_inds, b_inds]]
+                Mmat = Cm.conj().transpose(0, 2, 1) @ ovlp_ao @ Cn
+                M_matrix[:, :, b_inds, k_inds] = Mmat.transpose(1, 2, 0)
+                ovlp_ao = Cm = Cn = Mmat = None
+
+        logger.timer(self, "Wannier90: M matrix", *cput1)
+        logger.debug(self, "Wannier90: M matrix complete.")
+        return M_matrix
+
+    def get_M_mat_loop(self):
+        r"""
+        Reference implementation of get_M_mat: ft_aopair per (k, b) pair.
+        """
         M_matrix = np.empty((self.num_bands, self.num_bands, self.nntot, self.num_kpts),
                             dtype=np.complex128, order='F')
-
-        # Generate the M-matrix per k-points and per b-points
         for k_idx in range(self.num_kpts):
             for b_idx in range(self.nntot):
                 # k
@@ -410,39 +483,6 @@ class W90:
                 Cm = self.mo_coeff[k_idx][:, self.band_included_list]
                 Cn = self.mo_coeff[k2_idx][:, self.band_included_list]
                 M_matrix[:, :, b_idx, k_idx] = Cm.conj().T @ ovlp_ao @ Cn
-
-        """
-        # Generate the M-matrix for batched k-points
-        k1_bohr = self.cell.get_abs_kpts(self.kpt_latt.T)
-        Cm = self.mo_coeff[:, :, self.band_included_list]
-
-        nnlst = self.nnlist - 1
-        bk_scaled_per_idx = np.array([self.kpt_latt.T[nnlst[:, x]] - self.kpt_latt.T + self.nncell[:, :, x].T
-        for x in range(self.nntot)]) # (nntot, nkpts, 3)
-        # From the neighbor list, find all the unique bk_scaled and their indices (with tol=1e-5)
-        flat = bk_scaled_per_idx.reshape(-1, 3)
-        lex_order = np.lexsort(flat.T[::-1])
-        sorted_flat = flat[lex_order]
-        changed = np.any(np.abs(np.diff(sorted_flat, axis=0)) > 1e-5, axis=1)
-        group_labels = np.empty(len(flat), dtype=int)
-        group_labels[lex_order] = np.concatenate([[0], np.cumsum(changed)])
-        bk_scaled_indices = group_labels.reshape(bk_scaled_per_idx.shape[:2])  # (nntot, nkpts)
-        unique_starts = np.r_[0, np.where(changed)[0] + 1]
-        bk_scaled_unique = sorted_flat[unique_starts]  # (n_unique, 3)
-
-        assert bk_scaled_unique.shape[0] == self.nntot
-
-        for u_idx in range(self.nntot):
-            b_bohr = self.cell.get_abs_kpts(bk_scaled_unique[u_idx].reshape(1, 3))[0]
-            b_inds, k_inds = np.where(bk_scaled_indices == u_idx)
-            k2_inds = nnlst[k_inds, b_inds]
-            ovlp_ao = ft_ao.ft_aopair_kpts(
-                self.cell, Gv=np.array([b_bohr]), kptjs=k1_bohr[k_inds] + b_bohr)[:, 0]
-            Mmat = np.einsum("kmi,kmn,knj->kij", Cm[k_inds].conj(), ovlp_ao, Cm[k2_inds])
-            M_matrix[:, :, b_inds, k_inds] = Mmat.transpose(1, 2, 0)
-        """
-
-        logger.debug(self, "Wannier90: M matrix complete.")
         return M_matrix
 
     def get_A_mat(self, **kwargs):

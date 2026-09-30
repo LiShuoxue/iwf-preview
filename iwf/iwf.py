@@ -16,7 +16,7 @@ from pyscf.pbc.tools import pyscf_ase
 from pyscf.tools import cubegen
 
 from iwf.utils import get_w90_projection_keywords
-from iwf.backend import iao, orth, scdm, pywannier90
+from iwf.backend import iao, orth, scdm, pywannier90, pywannier90_v4
 
 
 def inv1pexp(x):
@@ -251,21 +251,27 @@ class IWF(lib.StreamObject):
             cubegen.orbital(self.cell, fname, C_R0[..., i], **kwargs)
 
     # Benchmark
-    def get_w90_obj(self):
+    def get_w90_obj(self, w90_version=3):
+        """
+        w90_version: 3 for the wannier90 v3 library (pywannier90),
+                     4 for the wannier90 v4 python wrapper (pywannier90_v4).
+        """
         assert self.kmesh is not None, "kmesh must be provided to get the Wannier90 object"
         other_kws = get_w90_projection_keywords(self.cell, self.downfold_labels)
-        myw90 = pywannier90.W90(self.mf, self.kmesh,
+        w90_module = {3: pywannier90, 4: pywannier90_v4}[w90_version]
+        myw90 = w90_module.W90(self.mf, self.kmesh,
                                 num_wann=self.nwann, other_keywords=other_kws)
         return myw90
 
 
-    def run_w90(self, w90_kwargs: dict={}):
+    def run_w90(self, w90_kwargs: dict={}, w90_version=3):
         """
         extra_keywords: List of additional Wannier90 keywords to include in the input file (e.g. for disentanglement or preconditioning).
             If dis_win_min and dis_win_max are not provided, they will be automatically set to the minimum and maximum of the energy_window, respectively.
+        w90_version: 3 (pywannier90) or 4 (pywannier90_v4), see get_w90_obj.
         """
         kmf = self.mf
-        myw90 = self.get_w90_obj()
+        myw90 = self.get_w90_obj(w90_version=w90_version)
         labels = self.downfold_labels
 
         dis_win_min, dis_win_max = map(w90_kwargs.get, ('dis_win_min', 'dis_win_max'))
@@ -284,9 +290,9 @@ class IWF(lib.StreamObject):
         myw90.kernel(A_matrix=A_matrix, M_matrix=M_matrix)
 
         C_ao_mo = np.array(myw90.mo_coeff)[..., myw90.band_included_list]
-        ew_eV = self.mo_energy * HARTREE2EV
-        dis_win_idxs = [np.where((ew_eV[k] >= dis_win_min) & (ew_eV[k] <= dis_win_max))[0]
-                        for k in range(len(kmf.kpts))]
+        # NOTE: use lwindow rather than the energy window to select the bands, since
+        # the projectability disentanglement (v4) may discard bands inside the window.
+        dis_win_idxs = [np.where(myw90.lwindow[:, k])[0] for k in range(len(kmf.kpts))]
         ndiswin = [len(idxs) for idxs in dis_win_idxs]
         C_ao_lo = np.array([
             np.einsum('mi,iI,IJ->mJ',
@@ -304,6 +310,41 @@ class IWF(lib.StreamObject):
                     f.create_dataset(k, data=getattr(myw90, k))
         return C_ao_lo
 
+
+    def eval_wann_properties(self, C_ao_lo, w90_kwargs: dict={}, cache_path="w90.h5"):
+        """
+        Wannier centres and spread functional of the given orbitals (no optimisation),
+        evaluated by the wannier90 v4 library (pywannier90_v4).
+
+        Args:
+            C_ao_lo: (nkpts, nao, nwann) orbitals on the Monkhorst-Pack k-mesh.
+            w90_kwargs: extra wannier90 keywords (num_iter, exclude_bands and dis_*
+                are ignored, since the spread is only evaluated).
+            cache_path: w90.h5 of run_w90, to reuse the M matrix.
+
+        Returns:
+            dict with centres (nwann, 3) [Angstrom], spreads (nwann) [Angstrom^2],
+            omega_total, omega_I, omega_D, omega_OD, omega_tilde [Angstrom^2].
+        """
+        assert self.kmesh is not None, "kmesh must be provided to evaluate the spreads"
+        M_matrix = None
+        if cache_path is not None and os.path.exists(cache_path):
+            with h5py.File(cache_path, "r") as f:
+                M_matrix = f['M_matrix'][:]
+        myw90 = self.get_w90_obj(w90_version=4)
+        myw90.keywords = get_w90_projection_keywords(
+            self.cell, self.downfold_labels, extra_keywords=w90_kwargs)
+        myw90.make_win()
+        myw90.setup()
+        if M_matrix is not None and M_matrix.shape != (myw90.num_bands, myw90.num_bands,
+                                                       myw90.nntot, myw90.num_kpts):
+            M_matrix = None     # cache from a different band selection
+
+        # C_mo_lo = C_mo^H S C_lo, in the basis of the included bands
+        C_ao_mo = np.asarray(myw90.mo_coeff)[..., myw90.band_included_list]
+        C_mo_lo = np.einsum("kai,kab,kbl->kil", C_ao_mo.conj(), self.ovlp_dict['s1'],
+                            C_ao_lo, optimize=True)
+        return myw90.eval_lo_spread(C_mo_lo, M_matrix=M_matrix)
 
     def run_scdm(self, scdm_kwargs: dict={}):
         ew, ev = self.mo_energy, self.mo_coeff

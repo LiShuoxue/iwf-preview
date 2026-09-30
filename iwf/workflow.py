@@ -140,7 +140,9 @@ class IWFWorkflow(lib.StreamObject):
             w90_kwargs = self.downfold_kwargs.get('w90', {})
             if 'num_wann' in w90_kwargs:
                 w90_kwargs.pop('num_wann')
-            C_ao_lo = mylo.run_w90(w90_kwargs)
+            # w90_version: 3 (wannier90 v3 library) or 4 (wannier90 v4 python wrapper)
+            C_ao_lo = mylo.run_w90(w90_kwargs,
+                                   w90_version=self.downfold_kwargs.get('w90_version', 3))
         elif lo_method == "scdm":
             scdm_kwargs = self.downfold_kwargs.get('scdm', {})
             C_ao_lo = mylo.run_scdm(scdm_kwargs)

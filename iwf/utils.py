@@ -1,3 +1,7 @@
+"""
+Various helper functions for IWF and other benchamarks.
+"""
+
 import numpy as np
 from itertools import pairwise
 from pyscf.pbc import gto as pgto
@@ -99,7 +103,7 @@ def get_hR(hk, kpts_rel, Rs):
 
 def get_interpolate_hk(hk, cell, kmesh, kpts_abs_band):
     """
-    Original code from Tianyu Zhu's code, see the following link for more details:
+    Interpolation method extracted from the following link for more details:
     https://github.com/ZhuGroup-Yale/fcdmft/tree/main/examples/interpolation
     """
     ndegen, irvec, _ = get_wigner_seitz_supercell(cell.lattice_vectors(), kmesh)
